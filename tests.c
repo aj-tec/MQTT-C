@@ -602,7 +602,7 @@ static void TEST__utility__message_queue(void **unused) {
 static void TEST__utility__pid_lfsr(void **unused) {
     struct mqtt_client client;
     uint8_t send[256], recv[256];
-    mqtt_init(&client, -1, send, 256, recv, 256, NULL);
+    mqtt_init(&client, -1, send, sizeof(send), recv, sizeof(recv), 0, NULL, NULL);
     client.pid_lfsr = 163u;
     uint32_t period = 0;
     do {
@@ -612,19 +612,33 @@ static void TEST__utility__pid_lfsr(void **unused) {
     assert_true(period == 65535u);
 }
 
-void publish_callback(struct mqtt_client* client, enum MQTTCallbackEvent event, union MQTTCallbackData* data, void** user_state) {
-    (void) client;
-    (void) event;
-    (void) data;
-    /*char *name = (char*) malloc(publish->topic_name_size + 1);
-    memcpy(name, publish->topic_name, publish->topic_name_size);
-    name[publish->topic_name_size] = '\0';
-    printf("Received a PUBLISH(topic=%s, DUP=%d, QOS=%d, RETAIN=%d, pid=%d) from the broker. Data='%s'\n",
-           name, publish->dup_flag, publish->qos_level, publish->retain_flag, publish->packet_id,
-           (const char*) (publish->application_message)
-    );
-    free(name);*/
-    **(int**)user_state += 1;
+void event_callback(struct mqtt_client* client, enum MQTTCallbackEvent event, union MQTTCallbackData* data, void** user_state) {
+    (void) client; /* Unused */
+    (void) data;   /* Unused */
+
+    switch (event) {
+    case MQTT_EVENT_RECEIVED:
+    {
+        /*
+        struct mqtt_response_publish* received_msg = data->received_msg;
+
+        char *name = (char*) malloc(received_msg->topic_name_size + 1);
+        memcpy(name, received_msg->topic_name, received_msg->topic_name_size);
+        name[received_msg->topic_name_size] = '\0';
+        printf("Received a PUBLISH(topic=%s, DUP=%d, QOS=%d, RETAIN=%d, pid=%d) from the broker. Data='%s'\n",
+               name, received_msg->dup_flag, received_msg->qos_level, received_msg->retain_flag, received_msg->packet_id,
+               (const char*) (received_msg->application_message)
+        );
+        free(name);
+        */
+
+        /* Assuming, that `user_state` is an `int` */
+        **(int**)user_state += 1;
+    } break;
+
+    default: break;
+    }
+
 }
 
 static void TEST__api__connect_ping_disconnect(void **unused) {
@@ -636,7 +650,7 @@ static void TEST__api__connect_ping_disconnect(void **unused) {
     int sockfd = open_nb_socket(addr, port);
 
     /* initialize */
-    mqtt_init(&client, sockfd, sendmem, sizeof(sendmem), recvmem, sizeof(recvmem), publish_callback);
+    mqtt_init(&client, sockfd, sendmem, sizeof(sendmem), recvmem, sizeof(recvmem), 0, NULL, NULL);
 
     /* connect */
     assert_true(mqtt_connect(&client, "liam-123", NULL, NULL, 0, NULL, NULL, 0, 30) > 0);
@@ -678,11 +692,10 @@ static void TEST__api__publish_subscribe__single(void **unused) {
     int state = 0;
 
     int sockfd = open_nb_socket(addr, port);
-    mqtt_init(&sender, sockfd, sendmem1, sizeof(sendmem1), recvmem1, sizeof(recvmem1), publish_callback);
+    mqtt_init(&sender, sockfd, sendmem1, sizeof(sendmem1), recvmem1, sizeof(recvmem1), 0, NULL, NULL);
 
     sockfd = open_nb_socket(addr, port);
-    mqtt_init(&receiver, sockfd, sendmem2, sizeof(sendmem2), recvmem2, sizeof(recvmem2), publish_callback);
-    receiver.user_callback_state = &state;
+    mqtt_init(&receiver, sockfd, sendmem2, sizeof(sendmem2), recvmem2, sizeof(recvmem2), MQTT_EVENT_RECEIVED, &state, event_callback);
 
     /* connect both */
     assert_true(mqtt_connect(&sender, "liam-123", NULL, NULL, 0, NULL, NULL, 0, 30) > 0);
@@ -741,11 +754,10 @@ static void TEST__api__publish_subscribe__multiple(void **unused) {
 
     /* initialize sender */
     int sockfd = open_nb_socket(addr, port);
-    mqtt_init(&sender, sockfd, sendmem1, sizeof(sendmem1), recvmem1, sizeof(recvmem1), publish_callback);
+    mqtt_init(&sender, sockfd, sendmem1, sizeof(sendmem1), recvmem1, sizeof(recvmem1), 0, NULL, NULL);
 
     sockfd = open_nb_socket(addr, port);
-    mqtt_init(&receiver, sockfd, sendmem2, sizeof(sendmem2), recvmem2, sizeof(recvmem2), publish_callback);
-    receiver.user_callback_state = &state;
+    mqtt_init(&receiver, sockfd, sendmem2, sizeof(sendmem2), recvmem2, sizeof(recvmem2), MQTT_EVENT_RECEIVED, &state, event_callback);
 
     /* connect both */
     if ((rv = mqtt_connect(&sender, "liam-123", NULL, NULL, 0, NULL, NULL, MQTT_CONNECT_CLEAN_SESSION, 30)) <= 0) {
