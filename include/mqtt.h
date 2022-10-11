@@ -1252,9 +1252,9 @@ struct mqtt_client {
     void (*user_callback)(struct mqtt_client* client, enum MQTTCallbackEvent event, union MQTTCallbackData* data, void** user_state);
 
     /**
-     * @brief A pointer to any publish_response_callback state information you need.
+     * @brief A pointer to any user_callback state information you need.
      *
-     * @note A pointer to this pointer will always be publish_response_callback upon
+     * @note A pointer to this pointer will always be user_callback upon
      *       receiving a publish message from the broker.
      */
     void* user_callback_state;
