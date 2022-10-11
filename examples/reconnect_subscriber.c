@@ -16,7 +16,7 @@
  *        to setup the connection to the broker.
  *
  * An instance of this struct will be created in my \c main(). Then, whenever
- * \ref reconnect_client is called, this instance will be passed.
+ * \ref event_callback is called on MQTT_EVENT_RECONNECT, this instance will be used.
  */
 struct reconnect_state_t {
     const char* hostname;
@@ -30,15 +30,9 @@ struct reconnect_state_t {
 
 
 /**
- * @brief My reconnect callback. It will reestablish the connection whenever
- *        an error occurs.
+ * @brief The function will be called on each enabled client-event (like message receiving or successful connection).
  */
-void reconnect_client(struct mqtt_client* client, void **reconnect_state_vptr);
-
-/**
- * @brief The function will be called whenever a PUBLISH message is received.
- */
-void publish_callback(void** unused, struct mqtt_response_publish *published);
+void event_callback(struct mqtt_client* client, enum MQTTCallbackEvent event, union MQTTCallbackData* data, void** user_state);
 
 /**
  * @brief The client's refresher. This function triggers back-end routines to
@@ -99,8 +93,8 @@ int main(int argc, const char *argv[])
     struct mqtt_client client;
 
     mqtt_init_reconnect(&client,
-                        reconnect_client, &reconnect_state,
-                        publish_callback
+                        MQTT_EVENT_RECONNECT | MQTT_EVENT_RECEIVED,
+                        &reconnect_state, event_callback
     );
 
     /* start a thread to refresh the client (handle egress and ingree client traffic) */
@@ -130,44 +124,69 @@ int main(int argc, const char *argv[])
     exit_example(EXIT_SUCCESS, client.socketfd, &client_daemon);
 }
 
-void reconnect_client(struct mqtt_client* client, void **reconnect_state_vptr)
+void event_callback(struct mqtt_client* client, enum MQTTCallbackEvent event, union MQTTCallbackData* data, void** user_state)
 {
-    struct reconnect_state_t *reconnect_state = *((struct reconnect_state_t**) reconnect_state_vptr);
+    switch (event) {
+    case MQTT_EVENT_RECONNECT:
+    {
+        /* Reestablish the connection whenever an error occurs. */
 
-    /* Close the clients socket if this isn't the initial reconnect call */
-    if (client->error != MQTT_ERROR_INITIAL_RECONNECT) {
-        close(client->socketfd);
-    }
+        struct reconnect_state_t *reconnect_state = *((struct reconnect_state_t**) user_state);
 
-    /* Perform error handling here. */
-    if (client->error != MQTT_ERROR_INITIAL_RECONNECT) {
-        printf("reconnect_client: called while client was in error state \"%s\"\n",
-               mqtt_error_str(client->error)
+        /* Close the clients socket if this isn't the initial reconnect call */
+        if (client->error != MQTT_ERROR_INITIAL_RECONNECT) {
+            close(client->socketfd);
+        }
+
+        /* Perform error handling here. */
+        if (client->error != MQTT_ERROR_INITIAL_RECONNECT) {
+            printf("event_callback: called on MQTT_EVENT_RECONNECT, while client was in error state \"%s\"\n",
+                   mqtt_error_str(client->error)
+            );
+        }
+
+        /* Open a new socket. */
+        int sockfd = open_nb_socket(reconnect_state->hostname, reconnect_state->port);
+        if (sockfd == -1) {
+            perror("Failed to open socket: ");
+            exit_example(EXIT_FAILURE, sockfd, NULL);
+        }
+
+        /* Reinitialize the client. */
+        mqtt_reinit(client, sockfd,
+                    reconnect_state->sendbuf, reconnect_state->sendbufsz,
+                    reconnect_state->recvbuf, reconnect_state->recvbufsz
         );
+
+        /* Create an anonymous session */
+        const char* client_id = NULL;
+        /* Ensure we have a clean session */
+        uint8_t connect_flags = MQTT_CONNECT_CLEAN_SESSION;
+        /* Send connection request to the broker. */
+        mqtt_connect(client, client_id, NULL, NULL, 0, NULL, NULL, connect_flags, 400);
+
+        /* Subscribe to the topic. */
+        mqtt_subscribe(client, reconnect_state->topic, 0);
+
+    } break;
+
+    case MQTT_EVENT_RECEIVED:
+    {
+        struct mqtt_response_publish* received_msg = data->received_msg;
+
+        /* note that published->topic_name is NOT null-terminated (here we'll change it to a c-string) */
+        char* topic_name = (char*) malloc(received_msg->topic_name_size + 1);
+        memcpy(topic_name, received_msg->topic_name, received_msg->topic_name_size);
+        topic_name[received_msg->topic_name_size] = '\0';
+
+        printf("Received publish('%s'): %s\n", topic_name, (const char*) received_msg->application_message);
+
+        free(topic_name);
+
+    } break;
+
+    default: break;
     }
-
-    /* Open a new socket. */
-    int sockfd = open_nb_socket(reconnect_state->hostname, reconnect_state->port);
-    if (sockfd == -1) {
-        perror("Failed to open socket: ");
-        exit_example(EXIT_FAILURE, sockfd, NULL);
-    }
-
-    /* Reinitialize the client. */
-    mqtt_reinit(client, sockfd,
-                reconnect_state->sendbuf, reconnect_state->sendbufsz,
-                reconnect_state->recvbuf, reconnect_state->recvbufsz
-    );
-
-    /* Create an anonymous session */
-    const char* client_id = NULL;
-    /* Ensure we have a clean session */
-    uint8_t connect_flags = MQTT_CONNECT_CLEAN_SESSION;
-    /* Send connection request to the broker. */
-    mqtt_connect(client, client_id, NULL, NULL, 0, NULL, NULL, connect_flags, 400);
-
-    /* Subscribe to the topic. */
-    mqtt_subscribe(client, reconnect_state->topic, 0);
 }
 
 void exit_example(int status, int sockfd, pthread_t *client_daemon)
@@ -175,18 +194,6 @@ void exit_example(int status, int sockfd, pthread_t *client_daemon)
     if (sockfd != -1) close(sockfd);
     if (client_daemon != NULL) pthread_cancel(*client_daemon);
     exit(status);
-}
-
-void publish_callback(void** unused, struct mqtt_response_publish *published)
-{
-    /* note that published->topic_name is NOT null-terminated (here we'll change it to a c-string) */
-    char* topic_name = (char*) malloc(published->topic_name_size + 1);
-    memcpy(topic_name, published->topic_name, published->topic_name_size);
-    topic_name[published->topic_name_size] = '\0';
-
-    printf("Received publish('%s'): %s\n", topic_name, (const char*) published->application_message);
-
-    free(topic_name);
 }
 
 void* client_refresher(void* client)
