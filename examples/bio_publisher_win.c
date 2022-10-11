@@ -12,11 +12,11 @@
 
 
 /**
- * @brief The function that would be called whenever a PUBLISH is received.
+ * @brief The function will be called on each enabled client-event (like message receiving or successful connection).
  *
  * @note This function is not used in this example.
  */
-void publish_callback(void** unused, struct mqtt_response_publish *published);
+void event_callback(struct mqtt_client* client, enum MQTTCallbackEvent event, union MQTTCallbackData* data, void** user_state);
 
 /**
  * @brief The client's refresher. This function triggers back-end routines to
@@ -79,7 +79,7 @@ int main(int argc, const char *argv[])
     struct mqtt_client client;
     uint8_t sendbuf[2048]; /* sendbuf should be large enough to hold multiple whole mqtt messages */
     uint8_t recvbuf[1024]; /* recvbuf should be large enough any whole mqtt message expected to be received */
-    mqtt_init(&client, sockfd, sendbuf, sizeof(sendbuf), recvbuf, sizeof(recvbuf), publish_callback);
+    mqtt_init(&client, sockfd, sendbuf, sizeof(sendbuf), recvbuf, sizeof(recvbuf), 0, NULL, event_callback);
     mqtt_connect(&client, "publishing_client", NULL, NULL, 0, NULL, NULL, 0, 400);
 
     /* check that we don't have any errors */
@@ -138,7 +138,7 @@ void exit_example(int status, BIO* sockfd)
 
 
 
-void publish_callback(void** unused, struct mqtt_response_publish *published)
+void event_callback(struct mqtt_client* client, enum MQTTCallbackEvent event, union MQTTCallbackData* data, void** user_state)
 {
     /* not used in this example */
 }
